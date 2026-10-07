@@ -50,6 +50,8 @@ def num(v):
 def age_at(birth, year):
     try: return round((date(year,9,1)-date.fromisoformat(birth[:10])).days/365.25,1)
     except (ValueError,TypeError): return None
+def canonical_team(team):
+    return {'LAR':'LA','JAC':'JAX','WSH':'WAS'}.get(team,team) if team else 'FA'
 def fantasy(s,ppr=1):
     n=lambda k:s.get(k) or 0
     return n('passing_yards')*.04+n('passing_tds')*4-n('passing_interceptions')*2+(n('rushing_yards')+n('receiving_yards'))*.1+(n('rushing_tds')+n('receiving_tds'))*6+n('receptions')*ppr-n('fumbles_lost_total')*2+2*sum(n(k) for k in ('passing_2pt_conversions','rushing_2pt_conversions','receiving_2pt_conversions'))
@@ -150,7 +152,7 @@ def build(start=1999):
         dr=int(float(draft.get('round') or meta.get('draft_round') or 0)) or None
         games=weekly.get(pid,[])
         fc,form,n,confidence=forecast(games,p['position'],year,dr)
-        team=p.get('team') or 'FA'
+        team=canonical_team(p.get('team'))
         upcoming=[g for g in schedules if team in (g['home_team'],g['away_team']) and not g.get('home_score')]
         next_game=upcoming[0] if upcoming else None
         opp=(next_game['away_team'] if next_game['home_team']==team else next_game['home_team']) if next_game else None

@@ -1,6 +1,6 @@
 import unittest,json,csv,hashlib
 from pathlib import Path
-from pipeline.build import forecast,fantasy,ROOT
+from pipeline.build import forecast,fantasy,canonical_team,ROOT
 
 class DataTests(unittest.TestCase):
     @classmethod
@@ -29,4 +29,8 @@ class DataTests(unittest.TestCase):
     def test_no_duplicate_player_weeks(self):
         for p in self.data['players'][:100]:
             detail=json.loads((ROOT/'public'/'data'/'players'/f"{p['id']}.json").read_text());keys=[(g['season'],g['week']) for g in detail['weekly']];self.assertEqual(len(keys),len(set(keys)))
+    def test_schedule_team_aliases(self):
+        self.assertEqual(canonical_team('LAR'),'LA');self.assertEqual(canonical_team('JAC'),'JAX');self.assertEqual(canonical_team(None),'FA')
+        p=next(p for p in self.data['players'] if p['name']=='Puka Nacua')
+        if p['team']=='LA' and self.data['manifest']['week']<18:self.assertGreater(p['remainingGames'],0)
 if __name__=='__main__':unittest.main()

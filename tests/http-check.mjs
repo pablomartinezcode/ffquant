@@ -28,4 +28,4 @@ if(token){
  }
  assert.equal((await call('/api/catalog')).data.manifest.id,d.manifest.id);
 }
-console.log('PASS: catalog, real profile/history, rankings, duplicate rejection, ingestion auth, and staging integrity.');
+console.log('PASS: catalog, real profile/history, rankings, duplicate rejection, and ingestion auth.'+(token?' Authenticated staging integrity checked.':''));
