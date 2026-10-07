@@ -1,6 +1,6 @@
 import { z } from 'zod';
 export const positions = ['QB','RB','WR','TE'] as const;
-export const MODEL_VERSION = 'baseline-0.2.0';
+export const MODEL_VERSION = 'baseline-0.3.0';
 export type Position = typeof positions[number];
 export type Stats = Record<string, number | null>;
 export interface Player {
@@ -9,6 +9,8 @@ export interface Player {
   dynastyForecasts?:Stats[]|null;previousDynastyForecasts?:Stats[]|null;
   draftPrior?:{bucket:string;count:number;hitRate:number;throughDraft:number}|null;
   depthOrder?:number|null;recentAppearances?:number;valuationEligible?:boolean;
+  dynastyEligible?:boolean;rosterStatus?:string;rosterWeek?:number;rosterAsOf?:string;sampleSeason?:number;
+  qbRole?:{current:number;dynasty:number;label:string;basis:string};
   scoreSamples?:{season:number;week:number;stats:Stats}[];
 }
 export interface Manifest {
@@ -57,6 +59,7 @@ export function ageForecast(fc:Stats,pos:Position,age:number,years:number):Stats
 }
 export function roleAvailability(p:Player){
   if(p.valuationEligible===false)return 0;
+  if(p.qbRole)return p.qbRole.dynasty;
   if(p.team==='FA')return .2;
   if(p.position!=='QB')return 1;
   if(p.depthOrder===1)return 1;
@@ -64,7 +67,24 @@ export function roleAvailability(p:Player){
   return (p.forecast.passing_yards??0)>=150&&(p.recentAppearances??p.gamesThisSeason)>0?.75:.15;
 }
 export interface RankedPlayer extends Player {rating:number;value:number;ppg:number;nextGamePoints:number;rosPoints:number;change:number|null;rank:number;positionRank:number;replacementPpg:number;explanation:string[];spread:ScoringSpread|null}
+export function isDynastyPlayer(p:Player){
+  return p.dynastyEligible!==false&&p.valuationEligible!==false&&p.team!=='FA'&&!!p.team&&!/retir/i.test(p.status??'')&&(!p.rosterStatus||!['RET','CUT','UFA','RFA','TRC','TRD','TRT','RSR'].includes(p.rosterStatus));
+}
+export type RankingSort='value'|'form'|'ppg'|'median'|'sd';
+export function qualifiedScoringSample(p:RankedPlayer){return (p.spread?.count??0)>=4&&(p.position!=='QB'||roleAvailability(p)>=.75);}
+export function sortRankings(players:RankedPlayer[],sort:RankingSort){
+  return players.filter(isDynastyPlayer).sort((a,b)=>{
+    if(['median','sd','form'].includes(sort)){
+      const aq=qualifiedScoringSample(a),bq=qualifiedScoringSample(b);
+      if(aq!==bq)return aq?-1:1;
+      if(!aq)return b.value-a.value||b.ppg-a.ppg||a.id.localeCompare(b.id);
+    }
+    const delta=sort==='form'?(b.currentForm??-Infinity)-(a.currentForm??-Infinity):sort==='ppg'?b.ppg-a.ppg:sort==='median'?(b.spread?.median??-Infinity)-(a.spread?.median??-Infinity):sort==='sd'?(a.spread?.sd??Infinity)-(b.spread?.sd??Infinity):b.value-a.value;
+    return (Number.isNaN(delta)?0:delta)||b.value-a.value||b.ppg-a.ppg||a.id.localeCompare(b.id);
+  });
+}
 export function rankPlayers(players:Player[],config:Config):RankedPlayer[]{
+  players=players.filter(isDynastyPlayer);
   const usable=(p:Player)=>Math.max(0,points(p.forecast,p.position,config))*roleAvailability(p);
   const pools=Object.fromEntries(positions.map(pos=>[pos,players.filter(p=>p.position===pos&&p.valuationEligible!==false&&p.team!=='FA').sort((a,b)=>usable(b)-usable(a))])) as Record<Position,Player[]>;
   const demand=Object.fromEntries(positions.map(p=>[p,lineupSlots(config).filter(s=>s===p).length*config.teams])) as Record<Position,number>;
@@ -85,8 +105,8 @@ export function rankPlayers(players:Player[],config:Config):RankedPlayer[]{
     return {value,ppg};
   }
   const ranked=players.map(p=>{const {value,ppg}=valuation(p,p.forecast),rating=ratingFromValue(value),previous=p.previousForecast?ratingFromValue(valuation(p,p.previousForecast,p.previousDynastyForecasts??undefined).value):null;
-    return {...p,value,rating,ppg,spread:scoringSpread(p,config),nextGamePoints:ppg*p.matchupFactor,rosPoints:ppg*p.remainingGames,change:previous===null?null:rating-previous,rank:0,positionRank:0,replacementPpg:replacement[p.position],explanation:[`${p.gamesThisSeason} current-season statistical appearances; recent production is shrunk toward established or draft-cohort production.`,`${Math.max(0,ppg-replacement[p.position]).toFixed(1)} projected points per game above a ${replacement[p.position].toFixed(1)}-point ${p.position} replacement.`,`Age ${p.age??'unknown'}; ${p.position==='QB'?'passing and rushing age separately':'position-specific continuous aging'}. Remaining season plus two future seasons, discounted 15% per year.`,...(p.draftPrior?[`Draft picks ${p.draftPrior.bucket}: ${p.draftPrior.count} historical ${p.position}s through ${p.draftPrior.throughDraft}; ${(p.draftPrior.hitRate*100).toFixed(0)}% met the disclosed three-year hit threshold. Draft evidence fades gradually with NFL experience.`]:[]),...(roleAvailability(p)<1?[`Role/availability weight ${(roleAvailability(p)*100).toFixed(0)}%; ${p.valuationEligible===false?'no recent NFL evidence or current prospect eligibility':p.team==='FA'?'free agent':'QB depth-order estimate'}. This is not an injury forecast.`]:[]),p.confidence==='low'?'Limited history: wider uncertainty; not a calibrated confidence interval.':'Projection combines recent performance and established production.']};
-  }).sort((a,b)=>b.value-a.value||a.id.localeCompare(b.id));
+    return {...p,value,rating,ppg,spread:scoringSpread(p,config),nextGamePoints:Math.max(0,points(p.forecast,p.position,config))*(p.qbRole?.current??roleAvailability(p))*p.matchupFactor,rosPoints:ppg*p.remainingGames,change:previous===null?null:rating-previous,rank:0,positionRank:0,replacementPpg:replacement[p.position],explanation:[`${p.gamesThisSeason} current-season statistical appearances; recent production is shrunk toward established or draft-cohort production.`,`${Math.max(0,ppg-replacement[p.position]).toFixed(1)} projected points per game above a ${replacement[p.position].toFixed(1)}-point ${p.position} replacement.`,`Age ${p.age??'unknown'}; ${p.position==='QB'?'passing and rushing age separately':'position-specific continuous aging'}. Remaining season plus two future seasons, discounted 15% per year.`,...(p.qbRole?[`${p.qbRole.label}: current-role weight ${Math.round(p.qbRole.current*100)}%, dynasty-role weight ${Math.round(p.qbRole.dynasty*100)}%. ${p.qbRole.basis}`]:[]),...(p.draftPrior?[`Draft picks ${p.draftPrior.bucket}: ${p.draftPrior.count} historical ${p.position}s through ${p.draftPrior.throughDraft}; ${(p.draftPrior.hitRate*100).toFixed(0)}% met the disclosed three-year hit threshold. Draft evidence fades gradually with NFL experience.`]:[]),...(roleAvailability(p)<1?[`Role/availability weight ${(roleAvailability(p)*100).toFixed(0)}%; ${p.valuationEligible===false?'no recent NFL evidence or current prospect eligibility':p.team==='FA'?'free agent':'QB depth-order estimate'}. This is not an injury forecast.`]:[]),p.confidence==='low'?'Limited history: wider uncertainty; not a calibrated confidence interval.':'Projection combines recent performance and established production.']};
+  }).sort((a,b)=>b.value-a.value||b.ppg-a.ppg||a.id.localeCompare(b.id));
   const counts:Record<string,number>={};return ranked.map((p,i)=>({...p,rank:i+1,positionRank:counts[p.position]=(counts[p.position]??0)+1}));
 }
 export const pickSchema=z.object({kind:z.literal('pick'),year:z.number().int(),round:z.number().int().min(1).max(5),slot:z.union([z.number().int().min(1).max(32),z.enum(['early','mid','late'])]),originalRosterId:z.number().int().optional()}).strict();

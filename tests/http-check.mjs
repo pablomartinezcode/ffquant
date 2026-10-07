@@ -7,7 +7,10 @@ const service=process.env.FFQUANT_SITE_AUTH;
 const headers=service?{'OAI-Sites-Authorization':`Bearer ${service}`} : {};
 async function call(path,value,extra={}){const r=await fetch(base+path,{headers:{...headers,'Content-Type':'application/json',...extra},...(value?{method:'POST',body:JSON.stringify(value)}:{})});return {status:r.status,data:await r.json()};}
 const d=(await call('/api/catalog')).data;
-assert.ok(d.players.length>1000);
+assert.ok(d.players.length>500);
+assert.ok(d.players.every(p=>p.dynastyEligible&&p.team!=='FA'));
+assert.ok(!d.players.some(p=>p.name==='Tom Brady'||p.name==='Joe Mixon'));
+const archive=(await call('/api/history-index')).data;assert.ok(archive.some(p=>p.name==='Tom Brady'&&!p.current));
 const p=d.players.find(p=>p.name==='Josh Allen');
 assert.ok(p);
 const profile=await call(`/api/player/${p.id}`);assert.equal(profile.status,200);assert.ok(profile.data.seasons.length>=8);
