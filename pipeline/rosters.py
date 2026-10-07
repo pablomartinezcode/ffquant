@@ -40,7 +40,7 @@ def assign_qb_roles(players, weekly, year):
             games = [g for g in weekly.get(p['id'], []) if g['team'] == team and g['season'] >= year-1 and (g['stats'].get('attempts') or 0) >= 15]
             prior = sum(g['season'] == year-1 for g in games)
             current = sum(g['season'] == year for g in games)
-            if p['status'] in {'Out', 'Doubtful', 'IR', 'PUP', 'Injured Reserve', 'Physically Unable to Perform'} and (prior >= 8 or current >= 2):
+            if p['status'] in {'Questionable', 'Out', 'Doubtful', 'IR', 'PUP', 'Injured Reserve', 'Physically Unable to Perform'} and (prior >= 8 or current >= 2):
                 injured.append((prior+current, p['id']))
         incumbent = max(injured, default=(0, None))[1]
         for p in group:

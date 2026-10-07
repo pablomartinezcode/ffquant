@@ -20,6 +20,10 @@ class RosterTests(unittest.TestCase):
         self.assertEqual(players[0]['qbRole']['current'],0)
         self.assertEqual(players[1]['qbRole']['current'],1)
         self.assertEqual(players[1]['qbRole']['dynasty'],.2)
+        players[0]['status']='Questionable'
+        assign_qb_roles(players,weekly,2026)
+        self.assertEqual(players[0]['qbRole']['dynasty'],1)
+        self.assertEqual(players[1]['qbRole']['dynasty'],.2)
         players[0]['status']='Active'
         assign_qb_roles(players,weekly,2026)
         self.assertEqual(players[0]['qbRole']['label'],'Backup')
