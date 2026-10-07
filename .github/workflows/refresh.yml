@@ -1,0 +1,45 @@
+name: Refresh NFL data
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */6 * 1,2,9,10,11,12 *'
+    - cron: '17 10 * 3,4,5,6,7,8 *'
+permissions:
+  contents: read
+concurrency:
+  group: ffquant-data-publication
+  cancel-in-progress: false
+jobs:
+  refresh:
+    # Must be enabled only after the authenticated machine-access probe succeeds.
+    if: vars.FFQUANT_PIPELINE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      FFQUANT_BASE_URL: ${{ vars.FFQUANT_BASE_URL }}
+      FFQUANT_INGEST_TOKEN: ${{ secrets.FFQUANT_INGEST_TOKEN }}
+      FFQUANT_SITE_AUTH: ${{ secrets.FFQUANT_SITE_AUTH }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Confirm machine access before downloading data
+        run: python -m pipeline.publish --probe
+      - uses: actions/cache@v4
+        with:
+          path: .data-cache
+          key: nfl-data-${{ github.run_id }}
+          restore-keys: nfl-data-
+      - run: python -m pipeline.build
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+      - run: python -m pipeline.publish --artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: source-and-coverage-reports
+          path: research/output/*.json
+          retention-days: 14
+      - name: Mark failed refresh for owner notification
+        if: failure()
+        run: echo '::error::FFQuant data refresh failed. Existing published snapshot is preserved. Review this run and source freshness.'

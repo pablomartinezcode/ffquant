@@ -1,0 +1,2 @@
+import { dataset,db,json,failure } from '@/lib/server';
+export async function GET(){try{const d=await dataset();const ageHours=(Date.now()-new Date(d.manifest.sourceUpdatedAt).getTime())/36e5;await db().prepare('SELECT 1').first();return json({status:ageHours>36?'stale':'ok',snapshotId:d.manifest.id,sourceUpdatedAt:d.manifest.sourceUpdatedAt,ageHours,modelVersion:d.manifest.modelVersion});}catch(e){return failure(e,503);}}

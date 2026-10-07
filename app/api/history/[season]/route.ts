@@ -1,0 +1,4 @@
+import { seedDataset } from '@/lib/dataset';
+import { env } from 'cloudflare:workers';
+import { dataset,json,failure } from '@/lib/server';
+export async function GET(request:Request,{params}:{params:Promise<{season:string}>}){try{const {season}=await params;const d=await dataset();if(!/^\d{4}$/.test(season)||Number(season)<1999||Number(season)>d.manifest.season)throw new Error('Season is outside available coverage.');const stored=await env.BUCKET?.get(`${d.manifest.id}/history/${season}.json`);if(stored)return new Response(stored.body,{headers:{'Content-Type':'application/json','Cache-Control':'no-store'}});if(d.manifest.id!==seedDataset.manifest.id)return json({error:'History artifact is missing from the active snapshot.'},503);return Response.redirect(new URL(`/data/history/${season}.json`,request.url),307);}catch(e){return failure(e,503);}}
