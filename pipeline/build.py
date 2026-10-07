@@ -5,6 +5,7 @@ import urllib.request, urllib.error
 from collections import defaultdict
 from datetime import datetime, timezone, date
 from pathlib import Path
+from pipeline.priors import build_priors, bucket
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.data-cache'
@@ -56,19 +57,19 @@ def fantasy(s,ppr=1):
     n=lambda k:s.get(k) or 0
     return n('passing_yards')*.04+n('passing_tds')*4-n('passing_interceptions')*2+(n('rushing_yards')+n('receiving_yards'))*.1+(n('rushing_tds')+n('receiving_tds'))*6+n('receptions')*ppr-n('fumbles_lost_total')*2+2*sum(n(k) for k in ('passing_2pt_conversions','rushing_2pt_conversions','receiving_2pt_conversions'))
 
-def forecast(games,pos,year,draft_round=None):
+def forecast(games,pos,year,draft_round=None,draft_prior=None):
     previous=[g for g in games if year-2<=g['season']<year]
     current=[g for g in games if g['season']==year]
     prior=previous[-17:]
     out={}
     for k in FIELDS:
         values=[g['stats'][k] for g in prior if g['stats'][k] is not None]
-        base=sum(values)/len(values) if values else PRIOR.get(pos,{}).get(k,0)
+        base=sum(values)/len(values) if values else (draft_prior or PRIOR.get(pos,{})).get(k,0)
         # Only forecasting uses priors. Observed null values remain null.
         weighted=[(g['stats'][k],2**(-(len(current)-1-i)/4)) for i,g in enumerate(current) if g['stats'][k] is not None]
         out[k]=round((base*4+sum(v*w for v,w in weighted))/(4+sum(w for _,w in weighted)),5)
     # Rookies have no NFL history; use an explicit draft-capital prior.
-    if not prior and not current:
+    if not prior and not current and not draft_prior:
         boost=({1:1.25,2:1.1,3:1.0} if pos=='QB' else {1:2.0,2:1.65,3:1.3}).get(draft_round,1)
         out={k:round(v*boost,5) for k,v in out.items()}
     baseline=sum(fantasy(g['stats']) for g in prior)/len(prior) if prior else fantasy(PRIOR.get(pos,{}))
@@ -86,7 +87,8 @@ def build(start=1999):
     schedule_b,schedule_meta=fetch('https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv','games.csv')
     schedule=rows(schedule_b)
     draft_b,draft_meta=fetch('https://github.com/nflverse/nflverse-data/releases/download/draft_picks/draft_picks.csv','draft.csv',86400)
-    drafts={r['gsis_id']:r for r in rows(draft_b) if r['gsis_id']}
+    draft_rows=rows(draft_b)
+    drafts={r['gsis_id']:r for r in draft_rows if r['gsis_id']}
     cross_b,cross_meta=fetch('https://raw.githubusercontent.com/DynastyProcess/data/master/files/db_playerids.csv','crosswalk.csv',86400)
     cross=defaultdict(set)
     for row in rows(cross_b):
@@ -128,6 +130,8 @@ def build(start=1999):
         for pos in POSITIONS:
             group=sorted([e for e in entries if e['position']==pos],key=lambda e:e['ppg'])
             for i,e in enumerate(group): e['percentile']=round(100*i/max(1,len(group)-1),1)
+    priors,prior_report=build_priors(draft_rows,people,weekly,year,FIELDS,fantasy)
+    dump(ROOT/'research'/'output'/'draft-priors.json',prior_report)
     espn=defaultdict(list)
     for pid,p in people.items():
         if p.get('espn_id'): espn[str(p['espn_id']).split('.')[0]].append(pid)
@@ -150,8 +154,18 @@ def build(start=1999):
         meta=people.get(pid,{})
         draft=drafts.get(pid,{})
         dr=int(float(draft.get('round') or meta.get('draft_round') or 0)) or None
+        pick=num(draft.get('pick') or meta.get('draft_pick'))
         games=weekly.get(pid,[])
-        fc,form,n,confidence=forecast(games,p['position'],year,dr)
+        experience=p.get('years_exp')
+        cohort=priors.get(f"{p['position']}:{bucket(pick)}") if pick and experience is not None and experience<4 else None
+        draft_prior=cohort['profiles'][min(2,experience)] if cohort else None
+        fc,form,n,confidence=forecast(games,p['position'],year,dr,draft_prior)
+        recent_games=[g for g in games if g['season']>=year-2]
+        # Smoothly retain draft evidence through the early career; no first-game or eighth-game cliff.
+        def dynasty_forecasts(current,observations):
+            weight=math.exp(-observations/24)*max(0,1-(experience or 0)/4) if cohort else 0
+            return [{k:round((1-weight)*current[k]+weight*cohort['profiles'][min(2,experience+y)][k],5) for k in FIELDS} if cohort else current.copy() for y in (1,2)]
+        dynasty=dynasty_forecasts(fc,len(games))
         team=canonical_team(p.get('team'))
         upcoming=[g for g in schedules if team in (g['home_team'],g['away_team']) and not g.get('home_score')]
         next_game=upcoming[0] if upcoming else None
@@ -160,13 +174,21 @@ def build(start=1999):
         all_allowed=[v for (t,pos),vs in opponent_ppg.items() if pos==p['position'] for v in vs]
         avg=sum(all_allowed)/len(all_allowed) if all_allowed else 1
         modifier=max(.9,min(1.1,(sum(allowance)+avg*40)/(len(allowance)+40)/max(avg,.1))) if allowance else 1
-        previous_fc=forecast(games[:-1],p['position'],year,dr)[0] if n else None
+        previous_fc=forecast(games[:-1],p['position'],year,dr,draft_prior)[0] if n else None
         active.append({'id':pid,'sleeperId':sid,'name':p.get('full_name') or ((p.get('first_name') or '')+' '+(p.get('last_name') or '')).strip(),'position':p['position'],'team':team,'age':age_at(p.get('birth_date') or meta.get('birth_date'),year),'status':p.get('injury_status') or p.get('status') or 'Unknown','statusAsOf':catalog_meta['fetchedAt'],'draftRound':dr,'draftPick':num(draft.get('pick') or meta.get('draft_pick')),'experience':p.get('years_exp'),'mapping':method,'forecast':fc,'previousForecast':previous_fc,'currentForm':form,'gamesThisSeason':n,'remainingGames':len(upcoming) if team!='FA' else 0,'nextOpponent':opp,'matchupFactor':round(modifier,4),'confidence':confidence})
-    model_hash=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'lib'/'football.ts').read_bytes()).hexdigest()
+        compact=lambda stats:{k:v for k,v in stats.items() if v is not None and v!=0}
+        active[-1]['forecast']=compact(fc)
+        active[-1]['previousForecast']=compact(previous_fc) if previous_fc else None
+        active[-1].update({'dynastyForecasts':[compact(f) for f in dynasty] if cohort else None,'previousDynastyForecasts':[compact(f) for f in dynasty_forecasts(previous_fc,len(games)-1)] if previous_fc and cohort else None,
+                          'draftPrior':{k:v for k,v in cohort.items() if k!='profiles'} if cohort else None,
+                          'depthOrder':num(p.get('depth_chart_order')), 'recentAppearances':len(recent_games),
+                          'valuationEligible':bool(recent_games or (experience is not None and experience<3)),
+                          'scoreSamples':[{'season':g['season'],'week':g['week'],'stats':{k:v for k,v in compact(g['stats']).items() if k not in ['targets','carries','receiving_air_yards','receiving_yards_after_catch','passing_epa','rushing_epa','receiving_epa','target_share']}} for g in recent_games[-17:]]})
+    model_hash=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'pipeline'/'priors.py').read_bytes()+(ROOT/'lib'/'football.ts').read_bytes()).hexdigest()
     digest=hashlib.sha256((model_hash+catalog_meta['fetchedAt']+''.join(s['sha256'] for s in sorted(sources,key=lambda x:x['url']))).encode()).hexdigest()[:20]
     built=now(); snapshot='nfl-'+digest
     latest_source=next(s for s in sources if s['url'].endswith(f'week_{year}.csv'))
-    manifest={'id':snapshot,'modelVersion':'baseline-0.1.0','season':year,'week':int(state['week']),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Status is a daily Sleeper snapshot, not a live injury feed.','Games count is appearances in the statistical source, not guaranteed games played for zero-stat players.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
+    manifest={'id':snapshot,'modelVersion':'baseline-0.2.0','season':year,'week':int(state['week']),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Position-specific aging curves are research-informed assumptions, not fitted causal effects.','Draft priors use completed historical cohorts including matched players with zero production; talent is proxied by NFL draft capital.','Status and depth order are daily Sleeper snapshots, not a live injury feed.','Scoring spread uses up to 17 statistical appearances; byes and missing zero-stat games are excluded. Median ± SD is descriptive, not a prediction interval.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
     data=ROOT/'data'; public=ROOT/'public'/'data'
     dump(ROOT/'research'/'output'/'mapping-review.json',unmatched)
     for s,entries in history.items(): dump(public/'history'/f'{s}.json',entries)

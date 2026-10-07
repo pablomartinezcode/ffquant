@@ -76,3 +76,8 @@ The baseline has broad heuristic uncertainty, not a calibrated player-level post
 - Resolve all commercial rights before monetization. See [source inventory](docs/sources.md).
 
 No live scoring, subscriptions, automated trade searching, or account-ownership claims are included. A Sleeper username lookup is public context, not authentication.
+
+
+## Model 0.2 and league overview
+
+Position-specific continuous aging separates QB passing/rushing. NFL draft-slot cohorts keep early-career evidence after debut and blend it out gradually. Replacement pools exclude stale catalog identities, weight QB roles, and respect the non-QB Superflex alternative. Rankings show a league-scored median ± sample-SD glyph; My league ranks all rosters by total or QB/RB/WR/TE value. See [model research and limitations](docs/model-0.2.md).

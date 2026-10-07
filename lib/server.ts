@@ -1,12 +1,15 @@
 import { env } from 'cloudflare:workers';
 import { seedDataset } from './dataset';
 import type { Dataset, Manifest, Player } from './football';
+import { MODEL_VERSION } from './football';
 export function db(){if(!env.DB)throw new Error('Database binding is unavailable.');return env.DB;}
 export async function dataset():Promise<Dataset>{
   const active=await db().prepare("SELECT snapshot_id FROM active_snapshot WHERE key='official'").first<{snapshot_id:string}>();
   if(!active)return seedDataset;
   const [snapshot,rows]=await Promise.all([db().prepare("SELECT manifest FROM snapshots WHERE id=? AND state='ready'").bind(active.snapshot_id).first<{manifest:string}>(),db().prepare('SELECT payload FROM players WHERE snapshot_id=?').bind(active.snapshot_id).all<{payload:string}>()]);
   if(!snapshot)throw new Error('Published snapshot is unavailable.');
+  // During model rollout, keep the new model paired with its compatible bundled inputs.
+  if(JSON.parse(snapshot.manifest).modelVersion!==MODEL_VERSION)return seedDataset;
   return {manifest:JSON.parse(snapshot.manifest) as Manifest,players:rows.results.map(r=>JSON.parse(r.payload) as Player)};
 }
 export function json(value:unknown,status=200){return Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});}

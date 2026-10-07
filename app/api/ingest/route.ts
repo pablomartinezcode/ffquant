@@ -1,10 +1,10 @@
 import { env } from 'cloudflare:workers';
 import { z } from 'zod';
 import { db,body,json,failure,ingestionAuth,audit } from '@/lib/server';
-import { rankPlayers,defaultConfig,type Player } from '@/lib/football';
+import { rankPlayers,defaultConfig,MODEL_VERSION,type Player } from '@/lib/football';
 const idSchema=z.string().regex(/^nfl-[a-f0-9]{20}$/);
 const stats=z.record(z.number().finite().nullable());
-const playerSchema=z.object({id:z.string().regex(/^[\w-]+$/),sleeperId:z.string(),name:z.string(),position:z.enum(['QB','RB','WR','TE']),team:z.string(),age:z.number().nullable(),status:z.string(),statusAsOf:z.string(),forecast:stats,previousForecast:stats.nullable(),currentForm:z.number().nullable(),remainingGames:z.number().min(0).max(17),gamesThisSeason:z.number().min(0).max(18),matchupFactor:z.number().min(.9).max(1.1),confidence:z.string(),mapping:z.string()}).passthrough();
+const playerSchema=z.object({id:z.string().regex(/^[\w-]+$/),sleeperId:z.string(),name:z.string(),position:z.enum(['QB','RB','WR','TE']),team:z.string(),age:z.number().nullable(),status:z.string(),statusAsOf:z.string(),forecast:stats,previousForecast:stats.nullable(),currentForm:z.number().nullable(),remainingGames:z.number().min(0).max(17),gamesThisSeason:z.number().min(0).max(18),matchupFactor:z.number().min(.9).max(1.1),confidence:z.string(),mapping:z.string(),depthOrder:z.number().nonnegative().nullable(),recentAppearances:z.number().int().nonnegative(),valuationEligible:z.boolean(),dynastyForecasts:z.array(stats).length(2).nullable(),previousDynastyForecasts:z.array(stats).length(2).nullable(),scoreSamples:z.array(z.object({season:z.number().int(),week:z.number().int().min(1).max(18),stats})).max(17),draftPrior:z.object({bucket:z.string(),count:z.number().int().positive(),hitRate:z.number().min(0).max(1),throughDraft:z.number().int()}).passthrough().nullable()}).passthrough();
 async function checksum(content:string){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(content)))).map(b=>b.toString(16).padStart(2,'0')).join('');}
 export async function GET(request:Request){
   if(!await ingestionAuth(request))return json({error:'Unauthorized'},401);
@@ -17,7 +17,7 @@ export async function POST(request:Request){
   if(!await ingestionAuth(request))return json({error:'Unauthorized'},401);
   try{const input=await body(request),id=idSchema.parse(input.id);
     if(input.action==='begin'){
-      const m=z.object({id:idSchema,playerCount:z.number().int().min(1).max(10000),sourceUpdatedAt:z.string(),modelVersion:z.literal('baseline-0.1.0'),builtAt:z.string(),artifacts:z.record(z.string().regex(/^[a-f0-9]{64}$/)),playerChecksums:z.record(z.string().regex(/^[a-f0-9]{64}$/))}).passthrough().parse(input.manifest);
+      const m=z.object({id:idSchema,playerCount:z.number().int().min(1).max(10000),sourceUpdatedAt:z.string(),modelVersion:z.literal(MODEL_VERSION),builtAt:z.string(),artifacts:z.record(z.string().regex(/^[a-f0-9]{64}$/)),playerChecksums:z.record(z.string().regex(/^[a-f0-9]{64}$/))}).passthrough().parse(input.manifest);
       if(m.id!==id)throw new Error('Manifest identity mismatch.');
       if(Object.keys(m.playerChecksums).length!==m.playerCount)throw new Error('Player checksum count mismatch.');
       await db().prepare('INSERT INTO snapshots (id,manifest,state,expected,created_at) VALUES (?,?,?,?,?) ON CONFLICT(id) DO NOTHING').bind(id,JSON.stringify(m),'staging',m.playerCount,new Date().toISOString()).run();const state=await db().prepare('SELECT state FROM snapshots WHERE id=?').bind(id).first<{state:string}>();return json({id,action:'begun',state:state?.state});
