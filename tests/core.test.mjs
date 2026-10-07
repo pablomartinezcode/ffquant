@@ -7,6 +7,14 @@ const ranked=rankPlayers(data.players,defaultConfig);
 test('display curve preserves inverse and elite premium',()=>{for(const r of [1,2,20,50,80,100])assert.ok(Math.abs(ratingFromValue(valueFromRating(r))-r)<1e-9);assert.ok(50*valueFromRating(2)<valueFromRating(100)*.05);});
 test('PPR, passing, fumbles, and TE premium use raw stats',()=>{const s={passing_yards:250,passing_tds:2,passing_interceptions:1,receptions:5,receiving_yards:60,fumbles_lost_total:1};assert.equal(points(s,'WR',defaultConfig),25);assert.equal(points(s,'TE',{...defaultConfig,tep:1}),30);assert.equal(points(s,'WR',{...defaultConfig,ppr:0}),20);});
 test('unsupported scoring is disclosed and bad configurations rejected',()=>{assert.equal(scoringWarnings({bonus_pass_yd_300:3}).length,1);assert.equal(scoringWarnings({rec:1,bonus_rec_te:.5}).length,0);assert.equal(configSchema.safeParse({teams:-3}).success,false);});
+
+test('standard Sleeper kicker and team-defense rules do not create offensive warnings',()=>{
+ const excluded={sack:1,fgm_40_49:4,pts_allow_0:10,fgm_30_39:3,fgm_50_59:5,xpmiss:-1,fgmiss:-1,ff:1,pts_allow_14_20:1,fgm_0_19:3,int:2,def_st_fum_rec:1,pts_allow_1_6:7,fgm_60p:6,fgm_20_29:3,xpm:1,fum_rec:2,def_st_td:6,def_td:6,safe:2,blk_kick:2,pts_allow_28_34:-1,pts_allow_35p:-4,def_st_ff:1,pts_allow_7_13:4};
+ assert.deepEqual(scoringWarnings({...excluded,rec:1,pass_int:-1}),[]);
+ const messages=scoringWarnings({...excluded,st_td:6,st_fum_rec:1,st_ff:1,fum_rec_td:6});
+ assert.equal(messages.length,1);assert.match(messages[0],/special-teams touchdowns/);assert.match(messages[0],/fumble-recovery touchdowns/);assert.doesNotMatch(messages[0],/fgm_|pts_allow_|def_st_/);
+ assert.equal(points({passing_interceptions:2,receptions:3},'WR',{...defaultConfig,scoring:{...excluded,pass_int:-1,rec:1}}),1);
+});
 test('rankings are bounded, finite, deterministic and preserve every player',()=>{assert.equal(ranked.length,data.players.length);assert.ok(ranked.every(p=>Number.isFinite(p.value)&&p.rating>=1&&p.rating<=100));assert.equal(JSON.stringify(ranked),JSON.stringify(rankPlayers(data.players,defaultConfig)));});
 test('superflex increases scarcity value for an established QB',()=>{const q=ranked.find(p=>p.name==='Josh Allen');const sf=rankPlayers(data.players,{...defaultConfig,superflex:true}).find(p=>p.id===q.id);assert.ok(sf.value>q.value);});
 test('lineup optimizer reserves eligible positional slots',()=>{const p=(id,pos,ppg)=>({id,position:pos,ppg});assert.equal(bestLineup([p('a','QB',30),p('b','WR',25),p('c','QB',10)],['SUPER_FLEX','QB']),55);assert.equal(bestLineup([p('a','QB',30)],['QB','SUPER_FLEX']),30);});

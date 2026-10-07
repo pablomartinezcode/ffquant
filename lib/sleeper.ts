@@ -22,10 +22,11 @@ export async function importLeague(id:string){
   const league=leagueSchema.parse(l.data),rosters=z.array(rosterSchema).parse(r.data);
   const supported=['QB','RB','WR','TE','FLEX','SUPER_FLEX','REC_FLEX','WRRB_FLEX'];
   const warnings=scoringWarnings(league.scoring_settings);
-  const unsupported=league.roster_positions.filter(s=>!supported.includes(s)&&s!=='BN');
-  if(unsupported.length)warnings.push(`Unsupported lineup positions: ${[...new Set(unsupported)].join(', ')}. Rankings cover offensive players only.`);
+  const unsupported=[...new Set(league.roster_positions.filter(s=>!supported.includes(s)&&s!=='BN'))];
+  const labels:Record<string,string>={K:'kickers',DEF:'team defenses',DST:'team defenses'};
+  const notes=unsupported.length?[`This beta evaluates QB, RB, WR, and TE. Your league’s ${unsupported.map(s=>labels[s]??s).join(' and ')} and their scoring are excluded; their occupied roster spots are still reserved in league-aware trades.`]:[];
   if([l,r,u,p,d].some(x=>x.stale))warnings.push('Sleeper refresh failed. Showing the last cached league snapshot.');
   const config=configSchema.parse({teams:league.total_rosters,superflex:league.roster_positions.includes('SUPER_FLEX'),ppr:league.scoring_settings.rec??0,tep:league.scoring_settings.bonus_rec_te??0,slots:league.roster_positions.filter(s=>supported.includes(s)),rosterSize:league.roster_positions.filter(s=>s==='BN'||supported.includes(s)).length,scoring:league.scoring_settings});
   await audit('league_import',{leagueId:id,rosters:rosters.length});
-  return {league,rosters,users:u.data,tradedPicks:p.data,drafts:d.data,config,warnings,fetchedAt:l.fetchedAt};
+  return {league,rosters,users:u.data,tradedPicks:p.data,drafts:d.data,config,warnings,notes,fetchedAt:l.fetchedAt};
 }

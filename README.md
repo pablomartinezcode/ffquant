@@ -2,6 +2,8 @@
 
 Private, non-commercial dynasty football research beta. Real nflverse statistics from 1999 onward, Sleeper league context, and an explicitly experimental performance-based valuation model. QB, RB, WR, and TE only.
 
+Private beta: https://ffquant.gabagoober.chatgpt.site · Source and Actions: https://github.com/pablomartinezcode/ffquant
+
 ## What works
 
 - Searchable rankings with positional rank, current form, projected PPG, and nonlinear dynasty ratings.
@@ -42,7 +44,7 @@ The builder uses Python's standard library. Raw downloads are cached under ignor
 
 Publication requires environment variables (see `.env.example`): `FFQUANT_BASE_URL`, `FFQUANT_INGEST_TOKEN`, and, for this private Site, `FFQUANT_SITE_AUTH`. The last is the platform's service-access token, sent only in `OAI-Sites-Authorization`. Do not put secrets in source, URLs, shell arguments, screenshots, or workflow logs. The publisher deliberately rejects login redirects.
 
-The checked-in GitHub Actions workflow is **not active until connected to a GitHub repository**, its secrets/variables are configured, and `FFQUANT_PIPELINE_ENABLED=true`. The Sites source repository is a separate Git service and does not execute GitHub Actions. Hosting the website does not activate recurring refreshes. See [operations](docs/operations.md).
+The GitHub Actions workflow is connected to `pablomartinezcode/ffquant`, its encrypted secrets and variables are configured, and `FFQUANT_PIPELINE_ENABLED=true`. The hosted machine-access probe passed. The first cloud publication must finish successfully before considering the data refresh operational. The Sites source repository is a separate Git service; GitHub runs the scheduler. See [operations](docs/operations.md).
 
 ## Validation and research
 
@@ -66,8 +68,8 @@ The baseline has broad heuristic uncertainty, not a calibrated player-level post
 
 ## Scope still requiring follow-through
 
-- Connect and run the GitHub scheduler; verify notification delivery and daily freshness monitoring.
-- Validate an owner's actual Sleeper league and recruit 5–10 beta managers.
+- Verify the completed cloud publication, subsequent scheduled runs, notification delivery, and daily freshness monitoring.
+- Finish user testing on the owner's Sleeper leagues and recruit 5–10 beta managers. Their standard kicker/defense settings are excluded in one scope note; individual special-teams/fumble-recovery rules remain explicitly approximate.
 - Add unsuccessful prospects with no NFL statistical appearance; backtest value above replacement, stability, and in-season opportunity changes as separate research targets.
 - Calibrate availability and uncertainty, deepen advanced-stat coverage, and research empirical rookie-pick curves.
 - Measure hosting/data-job costs before claiming the $100/month target is met.

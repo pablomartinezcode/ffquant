@@ -6,7 +6,13 @@ const idSchema=z.string().regex(/^nfl-[a-f0-9]{20}$/);
 const stats=z.record(z.number().finite().nullable());
 const playerSchema=z.object({id:z.string().regex(/^[\w-]+$/),sleeperId:z.string(),name:z.string(),position:z.enum(['QB','RB','WR','TE']),team:z.string(),age:z.number().nullable(),status:z.string(),statusAsOf:z.string(),forecast:stats,previousForecast:stats.nullable(),currentForm:z.number().nullable(),remainingGames:z.number().min(0).max(17),gamesThisSeason:z.number().min(0).max(18),matchupFactor:z.number().min(.9).max(1.1),confidence:z.string(),mapping:z.string()}).passthrough();
 async function checksum(content:string){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(content)))).map(b=>b.toString(16).padStart(2,'0')).join('');}
-export async function GET(request:Request){if(!await ingestionAuth(request))return json({error:'Unauthorized'},401);return json({ready:!!env.DB&&!!env.BUCKET,protocol:1});}
+export async function GET(request:Request){
+  if(!await ingestionAuth(request))return json({error:'Unauthorized'},401);
+  try{
+    const rows=await db().prepare('SELECT id,state,expected,manifest,(SELECT COUNT(*) FROM players WHERE snapshot_id=s.id) AS players,(SELECT COUNT(*) FROM artifacts WHERE snapshot_id=s.id) AS artifacts FROM snapshots s ORDER BY created_at DESC LIMIT 3').all<{id:string;state:string;expected:number;manifest:string;players:number;artifacts:number}>();
+    return json({ready:!!env.BUCKET,protocol:1,snapshots:rows.results.map(s=>({id:s.id,state:s.state,players:s.players,expectedPlayers:s.expected,artifacts:s.artifacts,expectedArtifacts:Object.keys(JSON.parse(s.manifest).artifacts??{}).length}))});
+  }catch(e){return failure(e,503);}
+}
 export async function POST(request:Request){
   if(!await ingestionAuth(request))return json({error:'Unauthorized'},401);
   try{const input=await body(request),id=idSchema.parse(input.id);

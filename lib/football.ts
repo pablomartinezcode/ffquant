@@ -20,7 +20,15 @@ export const configSchema=z.object({teams:z.number().int().min(4).max(32).defaul
 export type Config=z.infer<typeof configSchema>;
 export const defaultConfig:Config=configSchema.parse({});
 export function points(s:Stats,pos:Position,c:Config):number {const scoring=c.scoring??{...defaultScoring,rec:c.ppr};return Object.entries(scoring).reduce((total,[key,w])=>total+(s[scoringMap[key]]??0)*w,0)+(pos==='TE'?(s.receptions??0)*c.tep:0);}
-export function scoringWarnings(scoring:Record<string,number>):string[]{return Object.entries(scoring).filter(([k,v])=>v!==0&&!(k in scoringMap)&&k!=='bonus_rec_te').map(([k])=>`Unsupported scoring rule: ${k}. League values are approximate.`);}
+// These categories score the kicker or team defense, not QB/RB/WR/TE assets.
+const defenseScoring=new Set(['sack','sack_yd','int','int_ret_yd','ff','fum_rec','fum_ret_yd','safe','blk_kick','def_td','def_st_td','def_st_ff','def_st_fum_rec','def_2pt','def_3_and_out','def_4_and_stop','def_pass_def','tkl','tkl_solo','tkl_ast','tkl_loss','qb_hit']);
+export function excludedScoringRule(key:string){return /^(fgm|fgmiss|xpm|pts_allow_|yds_allow_|def_st_)/.test(key)||defenseScoring.has(key);}
+const playerRuleNames:Record<string,string>={st_td:'special-teams touchdowns',st_fum_rec:'special-teams fumble recoveries',st_ff:'special-teams forced fumbles',fum_rec_td:'fumble-recovery touchdowns'};
+export function scoringWarnings(scoring:Record<string,number>):string[]{
+  const unsupported=Object.entries(scoring).filter(([k,v])=>v!==0&&!(k in scoringMap)&&k!=='bonus_rec_te'&&!excludedScoringRule(k)).map(([k])=>k);
+  if(!unsupported.length)return [];
+  return [`Player-scoring coverage: ${unsupported.map(k=>playerRuleNames[k]??k).join(', ')} are not yet modeled. Values are approximate for players affected by these rules.`];
+}
 export const valueFromRating=(r:number)=>10000*Math.expm1(4*(Math.max(1,Math.min(100,r))-1)/99)/Math.expm1(4);
 export const ratingFromValue=(v:number)=>Math.max(1,Math.min(100,1+99*Math.log1p(Math.max(0,v)*Math.expm1(4)/10000)/4));
 export function lineupSlots(c:Config):string[]{return c.slots??['QB','RB','RB','WR','WR','TE','FLEX',...(c.superflex?['SUPER_FLEX']:[])];}
