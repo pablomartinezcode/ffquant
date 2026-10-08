@@ -14,7 +14,7 @@ class RosterTests(unittest.TestCase):
         self.assertFalse(current_roster(None,{'active':True,'status':'Active'},{'CHI':5}))
     def test_injury_cover_preserves_incumbent_without_promoting_one_game_backup(self):
         players=[{'id':'inc','team':'CHI','position':'QB','status':'Out','depthOrder':3},{'id':'cover','team':'CHI','position':'QB','status':'Active','depthOrder':1}]
-        weekly={'inc':[{'team':'CHI','season':2025,'stats':{'attempts':25}} for _ in range(17)],'cover':[{'team':'CHI','season':2026,'stats':{'attempts':30}}]}
+        weekly={'inc':[{'team':'CHI','season':2025,'week':i+1,'stats':{'attempts':25}} for i in range(17)]+[{'team':'CHI','season':2026,'week':i,'stats':{'attempts':25}} for i in (1,2)],'cover':[{'team':'CHI','season':2026,'week':3,'stats':{'attempts':30}}]}
         assign_qb_roles(players,weekly,2026)
         self.assertEqual(players[0]['qbRole']['dynasty'],1)
         self.assertEqual(players[0]['qbRole']['current'],0)
@@ -25,6 +25,10 @@ class RosterTests(unittest.TestCase):
         self.assertEqual(players[0]['qbRole']['dynasty'],1)
         self.assertEqual(players[1]['qbRole']['dynasty'],.2)
         players[0]['status']='Active'
+        assign_qb_roles(players,weekly,2026)
+        self.assertEqual(players[0]['qbRole']['label'],'Starter continuity')
+        self.assertEqual(players[0]['qbRole']['dynasty'],1)
+        weekly['cover']=[{'team':'CHI','season':2026,'week':i,'stats':{'attempts':30}} for i in (3,4,5,6)]
         assign_qb_roles(players,weekly,2026)
         self.assertEqual(players[0]['qbRole']['label'],'Backup')
         self.assertEqual(players[1]['qbRole']['dynasty'],1)

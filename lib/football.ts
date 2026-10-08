@@ -1,6 +1,6 @@
 import { z } from 'zod';
 export const positions = ['QB','RB','WR','TE'] as const;
-export const MODEL_VERSION = 'baseline-0.3.0';
+export const MODEL_VERSION = 'baseline-0.3.1';
 export type Position = typeof positions[number];
 export type Stats = Record<string, number | null>;
 export interface Player {

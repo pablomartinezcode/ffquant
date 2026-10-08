@@ -34,24 +34,38 @@ def assign_qb_roles(players, weekly, year):
     teams = defaultdict(list)
     for p in players:
         if p['position'] == 'QB': teams[p['team']].append(p)
+    injured_statuses = {'Questionable', 'Out', 'Doubtful', 'IR', 'PUP', 'Injured Reserve', 'Physically Unable to Perform'}
     for team, group in teams.items():
-        injured = []
+        evidence = {}
         for p in group:
             games = [g for g in weekly.get(p['id'], []) if g['team'] == team and g['season'] >= year-1 and (g['stats'].get('attempts') or 0) >= 15]
+            current = [g for g in games if g['season'] == year]
             prior = sum(g['season'] == year-1 for g in games)
-            current = sum(g['season'] == year for g in games)
-            if p['status'] in {'Questionable', 'Out', 'Doubtful', 'IR', 'PUP', 'Injured Reserve', 'Physically Unable to Perform'} and (prior >= 8 or current >= 2):
-                injured.append((prior+current, p['id']))
-        incumbent = max(injured, default=(0, None))[1]
+            evidence[p['id']] = {'current':current, 'prior':prior}
+        # Opening-game workload identifies continuity without treating an injury
+        # flag clearing before a depth-chart update as a permanent demotion.
+        opening_games = [(g['week'], -(g['stats'].get('attempts') or 0), p['id']) for p in group for g in evidence[p['id']]['current']]
+        incumbent = min(opening_games)[2] if opening_games else None
+        if incumbent:
+            incumbent_player = next(p for p in group if p['id'] == incumbent)
+            replacements = [p for p in group if p['id'] != incumbent and p['depthOrder'] == 1]
+            sustained = any(len(evidence[p['id']]['current']) >= 4 for p in replacements)
+            if incumbent_player['status'] not in injured_statuses and sustained:
+                incumbent = None
+        # A prior starter injured before the opener can still retain his role.
+        preseason_injured = [(evidence[p['id']]['prior'], p['id']) for p in group if p['status'] in injured_statuses and evidence[p['id']]['prior'] >= 8 and not evidence[p['id']]['current']]
+        if preseason_injured and (incumbent is None or evidence[incumbent]['prior'] < 8):
+            incumbent = max(preseason_injured)[1]
         for p in group:
             depth = p['depthOrder']
             role = 1 if depth == 1 else .2 if depth == 2 else .08 if depth else .15
-            unavailable = p['status'] in {'Out', 'Doubtful', 'IR', 'PUP', 'Injured Reserve', 'Physically Unable to Perform'}
+            unavailable = p['status'] in injured_statuses-{'Questionable'}
             if p['id'] == incumbent:
-                dynasty, label = 1, 'Injured incumbent'
+                dynasty = 1
+                label = 'Injured incumbent' if p['status'] in injured_statuses else 'Starter continuity' if depth != 1 else 'Starter'
             elif incumbent and depth == 1:
                 dynasty, label = .2, 'Temporary starter'
             else:
                 dynasty, label = role, 'Starter' if depth == 1 else 'Backup'
             p['qbRole'] = {'current':0 if unavailable else role, 'dynasty':dynasty, 'label':label,
-                           'basis':'Sleeper depth order; an injured same-team QB retains incumbent status with 8 prior-season or 2 current-season games of 15+ attempts. Return date is unknown.'}
+                           'basis':'Opening-game QB workload retains dynasty continuity through injury/return. A healthy incumbent yields after a depth-chart replacement has 4 games of 15+ attempts. Prior-season starters injured before the opener need 8 such games. These are role heuristics, not confirmed return dates.'}
