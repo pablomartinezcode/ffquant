@@ -29,7 +29,7 @@ Keep development on loopback. For local D1 setup, first build with `npm run buil
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_confused_james_howlett.sql
 ```
 
-Repeat for `0001_orange_apocalypse.sql` and `0002_black_jubilee.sql`. The checked-in real dataset lets the website render immediately; API routes require these migrations. Production migrations are part of Sites publication. Sites publication must use the Sites skill and the existing project ID; do not create a second Site or deploy this project to another host without an explicit decision.
+Repeat for `0001_orange_apocalypse.sql`, `0002_black_jubilee.sql` and `0003_violet_saracen.sql`. The checked-in real dataset lets the website render immediately; API routes require these migrations. Production migrations are part of Sites publication. Sites publication must use the Sites skill and the existing project ID; do not create a second Site or deploy this project to another host without an explicit decision.
 
 ## Refresh data
 
@@ -81,3 +81,7 @@ No live scoring, subscriptions, automated trade searching, or account-ownership 
 ## Model 0.2 and league overview
 
 Position-specific continuous aging separates QB passing/rushing. NFL draft-slot cohorts keep early-career evidence after debut and blend it out gradually. Replacement pools exclude stale catalog identities, weight QB roles, and respect the non-QB Superflex alternative. Rankings show a league-scored median ± sample-SD glyph; My league ranks all rosters by total or QB/RB/WR/TE value. See [model research and limitations](docs/model-0.2.md).
+
+## Model 0.4 and weekly tracking
+
+FFQ Rating now separates opportunity from efficiency and uses slower-moving future-season forecasts. Player profiles retain weekly overall/position ranks in canonical 1QB and Superflex PPR formats, with model/source provenance. Tooltips explain stats, role labels and confidence. See [parameters, mixed diagnostic results and archive semantics](docs/model-0.4.md).

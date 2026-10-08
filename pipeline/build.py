@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.data-cache'
 POSITIONS = ('QB', 'RB', 'WR', 'TE')
 FIELDS = ['attempts','passing_yards','passing_tds','passing_interceptions','passing_2pt_conversions','carries','rushing_yards','rushing_tds','rushing_2pt_conversions','targets','receptions','receiving_yards','receiving_tds','receiving_2pt_conversions','fumbles_lost_total','passing_first_downs','rushing_first_downs','receiving_first_downs','receiving_air_yards','receiving_yards_after_catch','passing_epa','rushing_epa','receiving_epa','target_share']
-PRIOR = {'QB':{'passing_yards':170,'passing_tds':1,'passing_interceptions':.7,'carries':2.5,'rushing_yards':12,'rushing_tds':.1},'RB':{'carries':4,'rushing_yards':16,'rushing_tds':.1,'targets':1.5,'receptions':1,'receiving_yards':7},'WR':{'targets':3,'receptions':1.8,'receiving_yards':22,'receiving_tds':.12},'TE':{'targets':2,'receptions':1.3,'receiving_yards':14,'receiving_tds':.08}}
+PRIOR = {'QB':{'attempts':28,'passing_yards':170,'passing_tds':1,'passing_interceptions':.7,'carries':2.5,'rushing_yards':12,'rushing_tds':.1},'RB':{'carries':4,'rushing_yards':16,'rushing_tds':.1,'targets':1.5,'receptions':1,'receiving_yards':7},'WR':{'targets':3,'receptions':1.8,'receiving_yards':22,'receiving_tds':.12},'TE':{'targets':2,'receptions':1.3,'receiving_yards':14,'receiving_tds':.08}}
 
 def now(): return datetime.now(timezone.utc).isoformat()
 def dump(path, value):
@@ -58,17 +58,46 @@ def fantasy(s,ppr=1):
     n=lambda k:s.get(k) or 0
     return n('passing_yards')*.04+n('passing_tds')*4-n('passing_interceptions')*2+(n('rushing_yards')+n('receiving_yards'))*.1+(n('rushing_tds')+n('receiving_tds'))*6+n('receptions')*ppr-n('fumbles_lost_total')*2+2*sum(n(k) for k in ('passing_2pt_conversions','rushing_2pt_conversions','receiving_2pt_conversions'))
 
-def forecast(games,pos,year,draft_round=None,draft_prior=None):
+def forecast(games,pos,year,draft_round=None,draft_prior=None,long_term=False):
     previous=[g for g in games if year-2<=g['season']<year]
     current=[g for g in games if g['season']==year]
     prior=previous[-17:]
-    out={}
+    # Opportunity adapts faster than efficiency; future seasons require more evidence.
+    strength,half_life=(8,8) if long_term else (4,4)
+    bases={}; out={}
     for k in FIELDS:
-        values=[g['stats'][k] for g in prior if g['stats'][k] is not None]
+        values=[g['stats'].get(k) for g in prior if g['stats'].get(k) is not None]
         base=sum(values)/len(values) if values else (draft_prior or PRIOR.get(pos,{})).get(k,0)
+        # A single old appearance must not become an established full-season prior.
+        if 0<len(values)<8:
+            fallback=(draft_prior or PRIOR.get(pos,{})).get(k,0)
+            base=(base*len(values)+fallback*(8-len(values)))/8
+        bases[k]=base
         # Only forecasting uses priors. Observed null values remain null.
-        weighted=[(g['stats'][k],2**(-(len(current)-1-i)/4)) for i,g in enumerate(current) if g['stats'][k] is not None]
-        out[k]=round((base*4+sum(v*w for v,w in weighted))/(4+sum(w for _,w in weighted)),5)
+        weighted=[(g['stats'][k],2**(-(len(current)-1-i)/half_life)) for i,g in enumerate(current) if g['stats'].get(k) is not None]
+        rare=k.endswith('_2pt_conversions') or k=='fumbles_lost_total'
+        weight=(24 if long_term else 16) if rare else strength
+        out[k]=(base*weight+sum(v*w for v,w in weighted))/(weight+sum(w for _,w in weighted))
+    # Estimate yards, catches and touchdowns per opportunity rather than smoothing
+    # fantasy totals. TD/turnover rates get more prior exposure than yardage rates.
+    groups={'attempts':['passing_yards','passing_tds','passing_interceptions','passing_first_downs'],
+            'carries':['rushing_yards','rushing_tds','rushing_first_downs'],
+            'targets':['receptions','receiving_yards','receiving_tds','receiving_first_downs']}
+    default_exposure={'attempts':28,'carries':4 if pos=='RB' else 2,'targets':PRIOR[pos].get('targets',1)}
+    for denominator,metrics in groups.items():
+        for k in metrics:
+            # Incomplete historical/cohort exposure cannot support a rate.
+            # Keep the smoothed metric rather than converting it into zero.
+            if bases[denominator]<=0 and bases[k]>0:continue
+            rare=k.endswith('_tds') or k=='passing_interceptions'
+            equivalent_games=(24 if long_term else 16) if rare else (12 if long_term else 8)
+            exposure=max(bases[denominator],default_exposure[denominator])
+            base_rate=bases[k]/bases[denominator] if bases[denominator]>0 else bases[k]/exposure
+            paired=[(g['stats'][k],g['stats'][denominator],2**(-(len(current)-1-i)/half_life)) for i,g in enumerate(current)
+                    if g['stats'].get(k) is not None and g['stats'].get(denominator) is not None]
+            rate=(base_rate*exposure*equivalent_games+sum(v*w for v,_,w in paired))/(exposure*equivalent_games+sum(n*w for _,n,w in paired))
+            out[k]=out[denominator]*rate
+    out={k:round(v,5) for k,v in out.items()}
     # Rookies have no NFL history; use an explicit draft-capital prior.
     if not prior and not current and not draft_prior:
         boost=({1:1.25,2:1.1,3:1.0} if pos=='QB' else {1:2.0,2:1.65,3:1.3}).get(draft_round,1)
@@ -168,12 +197,13 @@ def build(start=1999):
         cohort=priors.get(f"{p['position']}:{bucket(pick)}") if pick and experience is not None and experience<4 else None
         draft_prior=cohort['profiles'][min(2,experience)] if cohort else None
         fc,form,n,confidence=forecast(games,p['position'],year,dr,draft_prior)
+        long_fc=forecast(games,p['position'],year,dr,draft_prior,long_term=True)[0]
         recent_games=[g for g in games if g['season']>=year-2]
         # Smoothly retain draft evidence through the early career; no first-game or eighth-game cliff.
         def dynasty_forecasts(current,observations):
             weight=math.exp(-observations/24)*max(0,1-(experience or 0)/4) if cohort else 0
             return [{k:round((1-weight)*current[k]+weight*cohort['profiles'][min(2,experience+y)][k],5) for k in FIELDS} if cohort else current.copy() for y in (1,2)]
-        dynasty=dynasty_forecasts(fc,len(games))
+        dynasty=dynasty_forecasts(long_fc,len(games))
         team=canonical_team(roster['team'])
         upcoming=[g for g in schedules if team in (g['home_team'],g['away_team']) and not g.get('home_score')]
         next_game=upcoming[0] if upcoming else None
@@ -183,11 +213,12 @@ def build(start=1999):
         avg=sum(all_allowed)/len(all_allowed) if all_allowed else 1
         modifier=max(.9,min(1.1,(sum(allowance)+avg*40)/(len(allowance)+40)/max(avg,.1))) if allowance else 1
         previous_fc=forecast(games[:-1],p['position'],year,dr,draft_prior)[0] if n else None
+        previous_long_fc=forecast(games[:-1],p['position'],year,dr,draft_prior,long_term=True)[0] if n else None
         active.append({'id':pid,'sleeperId':sid,'name':p.get('full_name') or ((p.get('first_name') or '')+' '+(p.get('last_name') or '')).strip(),'position':p['position'],'team':team,'age':age_at(p.get('birth_date') or meta.get('birth_date'),year),'status':p.get('injury_status') or p.get('status') or 'Unknown','statusAsOf':catalog_meta['fetchedAt'],'draftRound':dr,'draftPick':num(draft.get('pick') or meta.get('draft_pick')),'experience':p.get('years_exp'),'mapping':method,'forecast':fc,'previousForecast':previous_fc,'currentForm':form,'gamesThisSeason':n,'remainingGames':len(upcoming) if team!='FA' else 0,'nextOpponent':opp,'matchupFactor':round(modifier,4),'confidence':confidence})
         compact=lambda stats:{k:v for k,v in stats.items() if v is not None and v!=0}
         active[-1]['forecast']=compact(fc)
         active[-1]['previousForecast']=compact(previous_fc) if previous_fc else None
-        active[-1].update({'dynastyForecasts':[compact(f) for f in dynasty] if cohort else None,'previousDynastyForecasts':[compact(f) for f in dynasty_forecasts(previous_fc,len(games)-1)] if previous_fc and cohort else None,
+        active[-1].update({'dynastyForecasts':[compact(f) for f in dynasty],'previousDynastyForecasts':[compact(f) for f in dynasty_forecasts(previous_long_fc,len(games)-1)] if previous_long_fc else None,
                           'draftPrior':{k:v for k,v in cohort.items() if k!='profiles'} if cohort else None,
                           'depthOrder':num(p.get('depth_chart_order')), 'recentAppearances':len(recent_games),
                           'valuationEligible':True,'dynastyEligible':True,'rosterStatus':roster['status'],'rosterWeek':int(roster.get('week') or 0),'rosterAsOf':roster_meta['fetchedAt'],'sampleSeason':year,
@@ -198,7 +229,7 @@ def build(start=1999):
     digest=hashlib.sha256((model_hash+catalog_meta['fetchedAt']+''.join(s['sha256'] for s in sorted(sources,key=lambda x:x['url']))).encode()).hexdigest()[:20]
     built=now(); snapshot='nfl-'+digest
     latest_source=next(s for s in sources if s['url'].endswith(f'week_{year}.csv'))
-    manifest={'id':snapshot,'modelVersion':'baseline-0.3.1','season':year,'week':int(state['week']),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Position-specific aging curves are research-informed assumptions, not fitted causal effects.','Draft priors use completed historical cohorts including matched players with zero production; talent is proxied by NFL draft capital.','Status and depth order are daily Sleeper snapshots, not a live injury feed.','Dynasty rankings include current NFL rosters and reserves, excluding retired and unrostered players. Membership is source-timestamped.', 'QB incumbent protection is a usage-based heuristic, not a confirmed recovery date.', 'Scoring spread uses current-season statistical appearances only; byes and missing zero-stat games are excluded. Median ± SD is descriptive, not a prediction interval.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
+    manifest={'id':snapshot,'modelVersion':'baseline-0.4.0','season':year,'week':int(state['week']),'statsThroughWeek':next(c['lastWeek'] for c in coverage if c['season']==year),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Opportunity and efficiency are estimated separately. Touchdown rates and future-season forecasts require more evidence; smoothing strengths are versioned assumptions awaiting held-out calibration.','Position-specific aging curves are research-informed assumptions, not fitted causal effects.','Draft priors use completed historical cohorts including matched players with zero production; talent is proxied by NFL draft capital.','Status and depth order are daily Sleeper snapshots, not a live injury feed.','Dynasty rankings include current NFL rosters and reserves, excluding retired and unrostered players. Membership is source-timestamped.', 'QB incumbent protection is a usage-based heuristic, not a confirmed recovery date.', 'Scoring spread uses current-season statistical appearances only; byes and missing zero-stat games are excluded. Median ± SD is descriptive, not a prediction interval.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
     data=ROOT/'data'; public=ROOT/'public'/'data'
     dump(ROOT/'research'/'output'/'mapping-review.json',unmatched)
     for s,entries in history.items(): dump(public/'history'/f'{s}.json',entries)

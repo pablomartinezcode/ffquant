@@ -15,6 +15,13 @@ const p=d.players.find(p=>p.name==='Josh Allen');
 assert.ok(p);
 const profile=await call(`/api/player/${p.id}`);assert.equal(profile.status,200);assert.ok(profile.data.seasons.length>=8);
 const history=await call('/api/history/2007');assert.ok(history.data.some(p=>p.name==='Tom Brady'));
+for(const format of ['1qb','sf']){
+ const saved=await call(`/api/player/${p.id}/ratings?format=${format}`);assert.equal(saved.status,200);assert.equal(saved.data.format,format);assert.ok(Array.isArray(saved.data.history));
+ if(process.env.FFQUANT_REQUIRE_HISTORY==='true'){
+  const row=saved.data.history[0];assert.ok(row);assert.equal(row.snapshot_id,d.manifest.id);assert.equal(row.week,d.manifest.statsThroughWeek);assert.equal(row.model_version,d.manifest.modelVersion);assert.ok(row.rank>0&&row.position_rank>0);
+ }
+}
+assert.equal((await call(`/api/player/${p.id}/ratings?format=invalid`)).status,400);
 const config={teams:12,superflex:false,ppr:1,tep:0,rosterSize:25};
 const ranks=await call('/api/rankings',config);assert.equal(ranks.status,200);assert.equal(ranks.data.players.length,d.players.length);
 const duplicate=await call('/api/trade',{config,sides:[[{kind:'player',id:p.id}],[{kind:'player',id:p.id}]]});assert.equal(duplicate.status,400);
