@@ -16,3 +16,7 @@ Manifest source entries preserve download URL, retrieval time, source update met
 The model currently derives features from nflverse's prepared player statistics; it does not download the entire raw play-by-play corpus. Add raw PBP/Parquet as a separate feature pipeline if a validated model needs it. Do not claim complete historical snaps, routes, or reliable live injuries. Consult the [nflverse availability schedule](https://nflreadr.nflverse.com/articles/nflverse_data_schedule.html) before adding those fields.
 
 FantasyCalc and DynastyCalc are product references, not scraped input datasets. No proprietary market values, projections, photos, or logos are copied.
+
+## Weekly absence coverage
+
+nflverse weekly rosters are now joined to completed regular-season schedules by explicit player identity and the team in that week. [Roster status dictionary](https://nflreadr.nflverse.com/articles/dictionary_roster_status.html) and [weekly roster documentation](https://nflreadr.nflverse.com/reference/load_rosters_weekly.html) define membership, not complete game participation. ACT with no stat line is unknown; absence counts require inactive/reserve evidence. Source retrieval metadata is included in every snapshot.

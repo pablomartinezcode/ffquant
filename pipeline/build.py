@@ -7,6 +7,8 @@ from datetime import datetime, timezone, date
 from pathlib import Path
 from pipeline.priors import build_priors, bucket
 from pipeline.rosters import roster_index, current_roster, assign_qb_roles
+from pipeline.season_transition import opening_signals
+from pipeline.availability import weekly_index, completed_games, availability_context
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / '.data-cache'
@@ -58,7 +60,7 @@ def fantasy(s,ppr=1):
     n=lambda k:s.get(k) or 0
     return n('passing_yards')*.04+n('passing_tds')*4-n('passing_interceptions')*2+(n('rushing_yards')+n('receiving_yards'))*.1+(n('rushing_tds')+n('receiving_tds'))*6+n('receptions')*ppr-n('fumbles_lost_total')*2+2*sum(n(k) for k in ('passing_2pt_conversions','rushing_2pt_conversions','receiving_2pt_conversions'))
 
-def forecast(games,pos,year,draft_round=None,draft_prior=None,long_term=False):
+def forecast(games,pos,year,draft_round=None,draft_prior=None,long_term=False,season_adaptation=True):
     previous=[g for g in games if year-2<=g['season']<year]
     current=[g for g in games if g['season']==year]
     prior=previous[-17:]
@@ -73,10 +75,14 @@ def forecast(games,pos,year,draft_round=None,draft_prior=None,long_term=False):
             fallback=(draft_prior or PRIOR.get(pos,{})).get(k,0)
             base=(base*len(values)+fallback*(8-len(values)))/8
         bases[k]=base
+    signals=opening_signals(games,pos,year,bases) if season_adaptation else []
+    reduction={s['metric']:s['priorReduction'] for s in signals}
+    for k in FIELDS:
+        base=bases[k]
         # Only forecasting uses priors. Observed null values remain null.
         weighted=[(g['stats'][k],2**(-(len(current)-1-i)/half_life)) for i,g in enumerate(current) if g['stats'].get(k) is not None]
         rare=k.endswith('_2pt_conversions') or k=='fumbles_lost_total'
-        weight=(24 if long_term else 16) if rare else strength
+        weight=(24 if long_term else 16) if rare else strength*(1-reduction.get(k,0))
         out[k]=(base*weight+sum(v*w for v,w in weighted))/(weight+sum(w for _,w in weighted))
     # Estimate yards, catches and touchdowns per opportunity rather than smoothing
     # fantasy totals. TD/turnover rates get more prior exposure than yardage rates.
@@ -114,6 +120,8 @@ def build(start=1999):
     sleeper=json.loads(catalog_b)
     roster_b,roster_meta=fetch(f'https://github.com/nflverse/nflverse-data/releases/download/rosters/roster_{year}.csv',f'roster_{year}.csv')
     roster_gsis,roster_sleeper,roster_weeks=roster_index(rows(roster_b))
+    weekly_roster_b,weekly_roster_meta=fetch(f'https://github.com/nflverse/nflverse-data/releases/download/weekly_rosters/roster_weekly_{year}.csv',f'roster_weekly_{year}.csv')
+    weekly_gsis,weekly_sleeper=weekly_index(rows(weekly_roster_b))
     people_b,people_meta=fetch('https://github.com/nflverse/nflverse-data/releases/download/players/players.csv','players.csv',86400)
     people={r['gsis_id']:r for r in rows(people_b) if r['gsis_id']}
     schedule_b,schedule_meta=fetch('https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv','games.csv')
@@ -126,7 +134,7 @@ def build(start=1999):
     for row in rows(cross_b):
         if row.get('sleeper_id') not in ('',None,'NA') and row.get('gsis_id') in people:
             cross[row['sleeper_id']].add(row['gsis_id'])
-    sources=[catalog_meta,roster_meta,people_meta,schedule_meta,draft_meta,cross_meta]
+    sources=[catalog_meta,roster_meta,weekly_roster_meta,people_meta,schedule_meta,draft_meta,cross_meta]
     release='https://github.com/nflverse/nflverse-data/releases/download/stats_player/'
     def season(s):
         key=f'stats_player_week_{s}.csv'
@@ -146,6 +154,8 @@ def build(start=1999):
             weekly[r['player_id']].append(g)
             if s>=year-1: opponent_ppg[(r['opponent_team'],r['position'])].append(fantasy(g['stats']))
         coverage.append({'season':s,'rows':len(reg),'players':len({r['player_id'] for r in reg}),'lastWeek':max((int(r['week']) for r in reg),default=0),'fields':{k:sum(r.get(k,'')!='' for r in reg) for k in FIELDS}})
+    through_week=next(c['lastWeek'] for c in coverage if c['season']==year)
+    completed=completed_games(schedule,year,through_week)
     for pid,games in weekly.items():
         games.sort(key=lambda g:(g['season'],g['week']))
         groups=defaultdict(list)
@@ -223,13 +233,18 @@ def build(start=1999):
                           'depthOrder':num(p.get('depth_chart_order')), 'recentAppearances':len(recent_games),
                           'valuationEligible':True,'dynastyEligible':True,'rosterStatus':roster['status'],'rosterWeek':int(roster.get('week') or 0),'rosterAsOf':roster_meta['fetchedAt'],'sampleSeason':year,
                           'scoreSamples':[{'season':g['season'],'week':g['week'],'stats':{k:v for k,v in compact(g['stats']).items() if k not in ['attempts','targets','carries','receiving_air_yards','receiving_yards_after_catch','passing_epa','rushing_epa','receiving_epa','target_share']}} for g in [g for g in recent_games if g['season']==year][-17:]]})
+        active[-1]['availability']=availability_context(weekly_gsis.get(pid) or weekly_sleeper.get(sid,[]),games,completed,year,through_week,weekly_roster_meta['fetchedAt'],active[-1]['status'],roster['status'],int(roster.get('week') or 0))
+        # The detector uses exactly the same prior bases as the forecasting function.
+        previous=[g for g in games if year-2<=g['season']<year][-17:]
+        bases={k:sum(g['stats'][k] for g in previous if g['stats'].get(k) is not None)/max(1,sum(g['stats'].get(k) is not None for g in previous)) for k in ('attempts','carries','targets')}
+        active[-1]['seasonTransition']=opening_signals(games,p['position'],year,bases)
     assign_qb_roles(active,weekly,year)
     dump(ROOT/'research'/'output'/'roster-review.json',{'excluded':excluded,'currentCount':len(active),'teamWeeks':roster_weeks,'source':roster_meta})
-    model_hash=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'pipeline'/'priors.py').read_bytes()+(ROOT/'pipeline'/'rosters.py').read_bytes()+(ROOT/'lib'/'football.ts').read_bytes()).hexdigest()
+    model_hash=hashlib.sha256(Path(__file__).read_bytes()+(ROOT/'pipeline'/'priors.py').read_bytes()+(ROOT/'pipeline'/'rosters.py').read_bytes()+(ROOT/'lib'/'football.ts').read_bytes()+(ROOT/'pipeline'/'availability.py').read_bytes()+(ROOT/'pipeline'/'season_transition.py').read_bytes()).hexdigest()
     digest=hashlib.sha256((model_hash+catalog_meta['fetchedAt']+''.join(s['sha256'] for s in sorted(sources,key=lambda x:x['url']))).encode()).hexdigest()[:20]
     built=now(); snapshot='nfl-'+digest
     latest_source=next(s for s in sources if s['url'].endswith(f'week_{year}.csv'))
-    manifest={'id':snapshot,'modelVersion':'baseline-0.4.0','season':year,'week':int(state['week']),'statsThroughWeek':next(c['lastWeek'] for c in coverage if c['season']==year),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Opportunity and efficiency are estimated separately. Touchdown rates and future-season forecasts require more evidence; smoothing strengths are versioned assumptions awaiting held-out calibration.','Position-specific aging curves are research-informed assumptions, not fitted causal effects.','Draft priors use completed historical cohorts including matched players with zero production; talent is proxied by NFL draft capital.','Status and depth order are daily Sleeper snapshots, not a live injury feed.','Dynasty rankings include current NFL rosters and reserves, excluding retired and unrostered players. Membership is source-timestamped.', 'QB incumbent protection is a usage-based heuristic, not a confirmed recovery date.', 'Scoring spread uses current-season statistical appearances only; byes and missing zero-stat games are excluded. Median ± SD is descriptive, not a prediction interval.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
+    manifest={'id':snapshot,'modelVersion':'baseline-0.5.0','season':year,'week':int(state['week']),'statsThroughWeek':next(c['lastWeek'] for c in coverage if c['season']==year),'builtAt':built,'sourceUpdatedAt':latest_source.get('sourceUpdatedAt') or latest_source['fetchedAt'],'firstSeason':start,'playerCount':len(active),'historicalPlayerCount':len(weekly),'historyRows':sum(map(len,history.values())),'unmatchedCount':len(unmatched),'coverage':coverage,'sources':sources,'limitations':['Experimental projections; not a validated advantage over market models.','Opportunity and efficiency are estimated separately. Touchdown rates and future-season forecasts require more evidence; smoothing strengths are versioned assumptions awaiting held-out calibration.','Position-specific aging curves are research-informed assumptions, not fitted causal effects.','Draft priors use completed historical cohorts including matched players with zero production; talent is proxied by NFL draft capital.','Opening-season opportunity shifts reduce stale prior weight after at least three consistent observations; touchdown and efficiency rate smoothing remains unchanged.','Availability weights are explicit experimental assumptions, not calibrated medical return forecasts. Future seasons retain role and age projections.','Missed games count confirmed inactive/reserve weeks on completed games through the statistical cutoff. Active roster membership without statistics is unknown participation, not an absence.','Status and depth order are daily Sleeper snapshots, not a live injury feed.','Dynasty rankings include current NFL rosters and reserves, excluding retired and unrostered players. Membership is source-timestamped.', 'QB incumbent protection is a usage-based heuristic, not a confirmed recovery date.', 'Scoring spread uses current-season statistical appearances only; byes and missing zero-stat games are excluded. Median ± SD is descriptive, not a prediction interval.','Advanced statistics are available only where provided.','Pick curves are provisional research assumptions.']}
     data=ROOT/'data'; public=ROOT/'public'/'data'
     dump(ROOT/'research'/'output'/'mapping-review.json',unmatched)
     for s,entries in history.items(): dump(public/'history'/f'{s}.json',entries)
