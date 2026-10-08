@@ -19,7 +19,7 @@ export const definitions={
   value:'Unrounded dynasty value above a replacement player, summed over the remaining season and two future seasons with a 15% annual discount. Trades use these value units, with roster adjustments, instead of adding FFQ Ratings.',
 };
 export const roleDefinitions:Record<string,string>={
-  'Injured incumbent':'An established starting QB whose published status indicates injury. The model retains his long-term starting role while reducing his immediate availability. Recovery timing is unknown.',
+  'Injured incumbent':'An established starting QB whose published status indicates injury. Long-term value retains his established role; the next-game projection uses a separate current role/status weight. Questionable alone does not imply a missed game. Recovery timing is unknown.',
   'Starter continuity':'The established starting QB retains the long-term role through a short absence or brief replacement run. Sustained healthy replacement starts can change this estimate.',
   'Temporary starter':'Currently listed as the starting QB, but another QB has the stronger established starting role. Immediate opportunity and long-term dynasty opportunity receive different weights.',
   'Backup':'A QB without an established starting role. His projection receives a reduced role weight; a strong relief appearance alone does not establish a long-term starting job.',
